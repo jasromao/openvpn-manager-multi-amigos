@@ -1,0 +1,119 @@
+#!/bin/bash
+
+set -e
+
+
+if [ -z "$1" ]; then
+    echo "Uso:"
+    echo "sudo /home/ubuntu/restaurar-openvpn-multi /caminho/backup.tar.gz"
+    exit 1
+fi
+
+BACKUP="$1"
+
+if [ ! -f "$BACKUP" ]; then
+    echo "ERRO: Backup não encontrado:"
+    echo "$BACKUP"
+    exit 1
+fi
+
+echo "========================================"
+echo " Restauro OpenVPN MULTI"
+echo "========================================"
+
+echo
+echo "A instalar pacotes necessários..."
+
+apt-get update
+
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    openvpn \
+    easy-rsa \
+    iptables-persistent \
+    netfilter-persistent \
+    python3 \
+    python3-flask \
+    python3-pip \
+    python3-flask-httpauth
+
+echo
+echo "A parar serviços..."
+
+systemctl stop openvpn-manager 2>/dev/null || true
+
+for srv in $(systemctl list-units --all --type=service --no-legend | awk '{print $1}' | grep '^openvpn-server@'); do
+    systemctl stop "$srv" 2>/dev/null || true
+done
+
+echo
+echo "A restaurar ficheiros..."
+
+tar -xzpf "$BACKUP" -C /
+
+
+echo
+echo "A corrigir permissões..."
+
+chown -R ubuntu:ubuntu /home/ubuntu/openvpn-manager-multi
+
+chmod +x /home/ubuntu/openvpn-manager-multi/criar-cliente-ovpn-web 2>/dev/null || true
+chmod +x /usr/local/bin/criar-cliente-ovpn-web 2>/dev/null || true
+chmod 644 /etc/systemd/system/openvpn-manager.service
+
+for dir in /etc/openvpn/*-easy-rsa; do
+    [ -d "$dir" ] || continue
+    chown -R root:root "$dir"
+    chmod +x "$dir/easyrsa" 2>/dev/null || true
+done
+
+echo
+echo "A ativar encaminhamento IP..."
+
+sysctl -w net.ipv4.ip_forward=1
+
+if grep -q '^net.ipv4.ip_forward=' /etc/sysctl.conf; then
+    sed -i 's/^net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+else
+    echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+fi
+
+echo
+echo "A restaurar regras iptables..."
+
+netfilter-persistent reload 2>/dev/null || true
+
+echo
+echo "A recarregar systemd..."
+
+systemctl daemon-reload
+
+echo
+echo "A ativar painel..."
+
+systemctl enable openvpn-manager
+systemctl restart openvpn-manager
+
+echo
+echo "A arrancar servidores OpenVPN..."
+
+for conf in /etc/openvpn/server/*.conf; do
+    [ -e "$conf" ] || continue
+
+    nome=$(basename "$conf" .conf)
+
+    systemctl enable "openvpn-server@$nome" 2>/dev/null || true
+    systemctl restart "openvpn-server@$nome" 2>/dev/null || true
+done
+
+echo
+echo "========================================"
+echo " Restauro concluído"
+echo "========================================"
+
+echo
+echo "Estado do painel:"
+systemctl --no-pager --full status openvpn-manager 2>/dev/null || true
+
+echo
+echo "Servidores OpenVPN:"
+systemctl --no-pager --type=service | grep 'openvpn-server@' || true
