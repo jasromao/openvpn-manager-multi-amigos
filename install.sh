@@ -17,9 +17,9 @@ echo "=========================================="
 echo
 
 while true; do
-    read -rsp "Escolha a password do painel (admin): " PANEL_PASS
+    read -rsp "Escolha a password do painel (admin): " PANEL_PASS </dev/tty
     echo
-    read -rsp "Repita a password: " PANEL_PASS2
+    read -rsp "Repita a password: " PANEL_PASS2 </dev/tty
     echo
 
     if [ -z "$PANEL_PASS" ]; then
